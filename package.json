@@ -1,0 +1,28 @@
+{
+  "name": "outbox-kit",
+  "version": "0.1.0",
+  "description": "A durable outbox for internal tools: idempotency keys, leased compare-and-swap claims, signed webhooks in and out, admin replay, and a delivery state that says uncertain when it doesn't know.",
+  "license": "MIT",
+  "author": "Jacob Lopez",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "node --no-warnings=ExperimentalWarning --test \"test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit",
+    "demo": "node --no-warnings=ExperimentalWarning examples/kiosk-to-crm.ts",
+    "admin": "node --no-warnings=ExperimentalWarning src/cli.ts",
+    "mutants": "node --no-warnings=ExperimentalWarning scripts/mutation-check.ts"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "standardwebhooks": "1.1.1",
+    "typescript": "5.9.3"
+  },
+  "packageManager": "pnpm@10.28.0"
+}
