@@ -1,7 +1,7 @@
 import type { DatabaseSync, SQLInputValue } from "node:sqlite";
 import { DEFAULT_LADDER_MS, DEFAULT_MAX_DELAY_MS, nextDelayMs } from "./classify.ts";
 import { clip, sha256Hex } from "./json.ts";
-import { inTransaction, migrate } from "./schema.ts";
+import { beginImmediate, inTransaction, migrate } from "./schema.ts";
 import { type HeaderSource, verifyHeaders } from "./signing.ts";
 import type { Clock } from "./types.ts";
 
@@ -83,7 +83,7 @@ export function createInbox(options: InboxOptions) {
       const now = clock();
       let row: Row | undefined;
       let failure: unknown = null;
-      db.exec("BEGIN IMMEDIATE;");
+      beginImmediate(db);
       try {
         row = db
           .prepare(

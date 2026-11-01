@@ -121,7 +121,7 @@ That is real output from a scratch database of five synthetic jobs. The CLI also
 
 ## What was tested
 
-`pnpm test` runs 87 tests in 8 files, on Node 22 and 24 in CI. Every test uses synthetic data.
+`pnpm test` runs 89 tests in 9 files, on Node 22 and 24 in CI. Every test uses synthetic data.
 
 | File | Tests | What it proves |
 |---|---|---|
@@ -133,6 +133,7 @@ That is real output from a scratch database of five synthetic jobs. The CLI also
 | `test/http.test.ts` | 6 | A real local receiver: signatures verified on the wire; 503 with `Retry-After`; a timeout becomes uncertain **and the receiver did get the request**; a refused connection retries; redirects aren't followed |
 | `test/processes.test.ts` | 1 | 4 separate OS processes drain 200 jobs from one SQLite file: every key is sent exactly once and accepted. The split per process is printed as a test diagnostic |
 | `test/cli.test.ts` | 5 | `status`, `list`, `attempts`, replay by state, window and key, and exit codes |
+| `test/locking.test.ts` | 2 | Another process holds the write lock past SQLite's busy timeout: a transaction waits and then commits instead of failing, a shorter wait still gives up, and an error that isn't a busy lock is raised at once |
 
 `pnpm mutants` breaks 14 rules one at a time in a scratch copy (for example: let uncertain jobs be claimed, drop the claim-token check, retry 500s, stop signing the timestamp) and fails unless the suite catches every one. It first requires the unmutated suite to pass. Today it catches 14 of 14. CI also runs `pnpm typecheck` (strict), `pnpm demo` and the CLI.
 
@@ -149,7 +150,7 @@ It fits one internal app with its own database, a few outside systems, and an ad
 
 ## Limits
 
-- SQLite through `node:sqlite`, which Node still marks experimental. One database file; WAL with `synchronous=FULL` and a 5-second busy timeout.
+- SQLite through `node:sqlite`, which Node still marks experimental. One database file; WAL with `synchronous=FULL` and a 5-second busy timeout. A transaction that still finds the write lock taken retries with backoff for up to 30 seconds (`LOCK_WAIT_MS`), then fails. Before this, one of four workers under heavy CPU load crashed with `database is locked` in the 200-job process test.
 - Nothing runs on its own: call `drain()` and `reconcile()` from a timer or cron.
 - Payloads stay in the table until `prune()`. Send references and minimal fields, not whole records.
 - It runs from a checkout (Node runs the TypeScript directly). It isn't on npm yet.

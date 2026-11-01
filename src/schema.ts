@@ -81,6 +81,29 @@ export function openDatabase(path: string): DatabaseSync {
   return db;
 }
 
+export const LOCK_WAIT_MS = 30_000;
+
+const pause = new Int32Array(new SharedArrayBuffer(4));
+
+function isBusy(error: unknown): boolean {
+  const code = (error as { errcode?: number } | null)?.errcode;
+  return code === 5 || code === 6;
+}
+
+export function beginImmediate(db: DatabaseSync, waitMs: number = LOCK_WAIT_MS): void {
+  const deadline = Date.now() + waitMs;
+  for (let attempt = 0; ; attempt++) {
+    try {
+      db.exec("BEGIN IMMEDIATE;");
+      return;
+    } catch (error) {
+      if (!isBusy(error) || Date.now() >= deadline) throw error;
+      const backoff = Math.min(250, 5 * 2 ** Math.min(attempt, 6));
+      Atomics.wait(pause, 0, 0, backoff / 2 + Math.random() * (backoff / 2));
+    }
+  }
+}
+
 export function inTransaction<T>(db: DatabaseSync, work: () => T): T {
   if (db.isTransaction) {
     db.exec("SAVEPOINT outbox_kit;");
@@ -93,7 +116,7 @@ export function inTransaction<T>(db: DatabaseSync, work: () => T): T {
       throw error;
     }
   }
-  db.exec("BEGIN IMMEDIATE;");
+  beginImmediate(db);
   try {
     const result = work();
     db.exec("COMMIT;");
