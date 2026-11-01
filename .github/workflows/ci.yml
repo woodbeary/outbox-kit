@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ["22", "24"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install
+        run: |
+          npm install --global pnpm@10.28.0
+          pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm typecheck
+      - name: Test
+        run: pnpm test
+      - name: The README's demo runs and checks its own outcome
+        run: pnpm demo
+      - name: Every guarded rule is caught when broken
+        run: pnpm mutants
+      - name: The admin CLI starts
+        run: pnpm -s admin --help
