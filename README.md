@@ -9,16 +9,16 @@ The integration layer under an internal tool. Every write the tool makes to an o
 
 Nothing `uncertain` is retried on a guess. A person replays it, with their name and a reason on the record, or the receiver's own record settles it.
 
-TypeScript on Node 22.18 or later, with `node:sqlite` and no runtime dependencies. MIT.
+TypeScript on Node 22.18 or later, with `node:sqlite` and no runtime dependencies. MIT. To run it from a checkout: `pnpm install`, then `pnpm test`, `pnpm demo` or `pnpm mutants`.
 
 ## Why I built this
 
-I have written this layer by hand four times this year, each time for a small business's tool:
+I have hand-built pieces of this layer four times this year, each time for a small business's tool:
 
 - **Jan 5, 2026, my company's CRM.** The phone provider's SMS delivery-receipt webhook upserted the message row, and when its phone lookup missed on formatting, it wrote `contact_id = null` over a good id. The live view filtered on `contact_id`, so delivery updates stopped appearing. The fix was to keep the existing `contact_id` and match on a normalized number.
 - **Feb 26 and Aug 14, 2026, an Inglewood paralegal office's check-in kiosk.** The bilingual kiosk's first commits all land between 6 and 7 pm on Feb 26. Its CRM sync came on Aug 14: an HMAC-SHA256 signature over the body, an idempotency-key header, retry delays doubling from 1 minute up to 24 hours, and four admin actions (run the queue, replay one key, replay the failed batch, replay a date window). It keeps only the last four digits of a visitor's phone number.
 - **Jul 16, 2026, OC Junk Removers' quote follow-up.** A database trigger writes the follow-up job in the same transaction that records the customer's SMS consent. A worker claims a job with a 90-second lease and an update that only succeeds if its status and attempt count are unchanged, backs off 1 min, 5 min, 15 min, 1 h, then 6 h, and fails a job for good only when re-reading the quote proves it can't be sent.
-- **Sep 7, 2026, TASK.** A Worker stores each Square webhook with its verified signature, then replays it to the app under a 120-second lease until the app's own record says it was processed. The email worker beside it was the first of the four to say `uncertain`: a send that threw, a missing provider receipt or a claim older than 15 minutes is never retried, because, in its own comment, "a crashed invocation might have sent before its receipt was saved."
+- **Sep 7, 2026, TASK.** The app stores each Square webhook with its verified signature, and a Worker replays it to the app under a 120-second lease until the app's own record says it was processed. The email worker beside it was the first of the four to say `uncertain`: a send that threw, a missing provider receipt or a claim older than 15 minutes is never retried, because, in its own comment, "a crashed invocation might have sent before its receipt was saved."
 
 Each one had a rule another lacked. The kiosk had no claim, so two queue runs could send the same check-in, and one `failed` state meant both "try again later" and "stop". The quote outbox retries forever at 6 hours. TASK's email worker had to call every expired claim uncertain, because it couldn't tell whether the send had started. None of those four runs outbox-kit. This is the fifth time, written once with tests, so the next internal tool starts with every rule instead of the ones I remembered that week.
 
@@ -68,9 +68,9 @@ stateDiagram-v2
     claimed --> accepted: 2xx
     claimed --> pending: 408, 425, 429, 503, or it never left this machine
     claimed --> pending: lease ran out before the send started
-    claimed --> failed: 409, other 4xx, revalidation failed, or out of attempts
+    claimed --> failed: 409, other 4xx, 3xx, 501, 505, revalidation failed, or out of attempts
     claimed --> suppressed: revalidation says don't send (consent revoked)
-    claimed --> uncertain: timeout, reset, 500, 502, 504, or lease ran out mid-send
+    claimed --> uncertain: timeout, reset, any other 5xx, or lease ran out mid-send
     uncertain --> accepted: receiver lookup finds the key, or the worker's late answer
     uncertain --> pending: receiver lookup says it never landed, or a person replays it
     failed --> pending: a person replays it, with actor and reason
@@ -86,7 +86,7 @@ stateDiagram-v2
 | The outbound job commits in the same transaction as the record | OC Junk Removers: the follow-up job and the SMS consent are one transaction | An explicit `outbox.transaction()`, so it's visible in the code that writes the record; it nests in a transaction you already opened |
 | One idempotency key per write, per destination | Kiosk: `x-idempotency-key` on every sync | The same key with a **different** payload throws `IdempotencyConflictError` instead of silently keeping the old one. Keys must be visible ASCII, since they travel in headers |
 | Claim with a lease and a compare-and-swap | Quote outbox: 90 s lease, update guarded on status and attempt count. TASK: one `UPDATE … RETURNING` with a claim token and a 120 s lease | A `send_started_at` mark. A lease that runs out **before** the send goes back to `pending`; one that runs out **after** is `uncertain`. Only the current token can settle, and no send starts on an expired lease. A destination's timeout must be shorter than the lease |
-| `uncertain` is never retried on its own | TASK email worker: a thrown send or a missing receipt settles as uncertain. The kiosk and quote outbox retried timeouts, relying on the receiver to dedupe on the key | Timeouts, resets, 500, 502 and 504 are uncertain by default. A refused connection or DNS failure proves nothing left, so it retries |
+| `uncertain` is never retried on its own | TASK email worker: a thrown send or a missing receipt settles as uncertain. The kiosk and quote outbox retried timeouts, relying on the receiver to dedupe on the key | Timeouts, resets and every 5xx except 501, 503 and 505 (so 500, 502, 504 and the rest) are uncertain by default. A refused connection or DNS failure proves nothing left, so it retries |
 | Settle uncertain from evidence | TASK's replay Worker decides "processed" by reading the app's own record, not the HTTP status | Optional `lookup(key)` per destination; `reconcile()` asks only after 5 minutes and moves a job only on `applied` or `not_applied` |
 | Back off, honor the receiver, then stop | Quote outbox: 1 min, 5 min, 15 min, 1 h, 6 h, then 6 h forever. Kiosk: doubling up to 24 h, forever | That ladder by default; `Retry-After` can make a wait longer, up to 24 h, never shorter; after `maxAttempts` (6) the job is `failed` with the reason |
 | One state per meaning | Kiosk: one `failed` state for both "retry later" and "stop" | `pending` with a time means retry; `failed` means stop until a person acts. 409 fails for a person to resolve |
@@ -94,7 +94,7 @@ stateDiagram-v2
 | Sign what you send | Kiosk: HMAC-SHA256 over the raw body | The message id and timestamp are inside the signature, so a captured request stops verifying after 5 minutes. It uses the Standard Webhooks header layout, checked against the `standardwebhooks` reference library in both directions, and signs with several secrets during a rotation |
 | Store webhooks in, once, before processing | TASK: Square events stored with their verified signature, deduped on event id | The handler's writes and the "processed" mark commit in one SQLite transaction; a handler that throws rolls back and backs off; async handlers are refused, since their writes would land outside it |
 | An inbound event never erases what you know | My company's CRM, Jan 5 | `mergeKnown(existing, incoming)`: null or missing never overwrites a known value; clearing a field must be named |
-| Keep the least you need | Kiosk: last four digits of the phone only. Quote outbox: error text clipped to 240 characters | `prune()` drops payloads of settled jobs after a retention window and audits it; reasons are clipped to 240 characters; the CLI's `list` and `attempts` never print payloads |
+| Keep the least you need | Kiosk: last four digits of the phone only. Quote outbox: error text clipped to 240 characters | `prune()` drops payloads of accepted and suppressed jobs after a retention window and audits it (failed and uncertain ones keep theirs for replay); reasons are clipped to 240 characters; the CLI's `list` and `attempts` never print payloads |
 
 ## Admin
 
@@ -145,7 +145,7 @@ Not measured here: throughput, latency or behaviour under load. The multi-proces
 - **The integration is a weekly spreadsheet someone emails**: fix the process before writing software.
 - **Many writers across services, or Postgres**: v0.1 is SQLite only. The same claims map to `UPDATE … WHERE id = (SELECT … FOR UPDATE SKIP LOCKED) RETURNING`, but that adapter isn't written or tested yet.
 
-It fits one internal app with its own database, a few outside systems, and an admin who has to answer "did it go through?" without opening a terminal on the server.
+It fits one internal app with its own database, a few outside systems, and an admin who has to answer "did it go through?" from a record instead of the logs. Today that record is read through the CLI; `status()`, `list()`, `attempts()` and `replay()` are the calls an admin page inside the tool would make, and that page isn't built.
 
 ## Limits
 

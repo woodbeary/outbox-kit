@@ -10,8 +10,16 @@ const mutations: Array<{ rule: string; file: string; from: string; to: string }>
   {
     rule: "uncertain jobs are never claimed",
     file: "src/outbox.ts",
-    from: "WHERE state = 'pending' AND next_attempt_at <= ?",
-    to: "WHERE state IN ('pending', 'uncertain') AND COALESCE(next_attempt_at, 0) <= ?",
+    from:
+      "WHERE state = 'pending' AND next_attempt_at <= ?\n" +
+      "                           AND destination IN (SELECT value FROM json_each(?))\n" +
+      "                         ORDER BY next_attempt_at, id LIMIT 1)\n" +
+      "              AND state = 'pending'",
+    to:
+      "WHERE state IN ('pending', 'uncertain') AND COALESCE(next_attempt_at, 0) <= ?\n" +
+      "                           AND destination IN (SELECT value FROM json_each(?))\n" +
+      "                         ORDER BY next_attempt_at, id LIMIT 1)\n" +
+      "              AND state IN ('pending', 'uncertain')",
   },
   {
     rule: "only the current claim token can settle a job",
@@ -77,7 +85,7 @@ const mutations: Array<{ rule: string; file: string; from: string; to: string }>
     rule: "every replay writes an audit row",
     file: "src/outbox.ts",
     from: "VALUES (?, ?, 'replay', ?, ?, ?, 'pending')",
-    to: "VALUES (?, ?, 'replay', ?, ?, ?, 'pending') ON CONFLICT DO NOTHING RETURNING id LIMIT 0",
+    to: "SELECT ?, ?, 'replay', ?, ?, ?, 'pending' WHERE 0",
   },
   {
     rule: "a failing inbox handler's writes roll back",
